@@ -24,6 +24,12 @@ from readiness import scenarios as SC
 from readiness.decision import ConditionInput, Decision, decide, decide_confirmed
 
 st.set_page_config(page_title="Gravity-Transition Readiness", page_icon="🧭", layout="wide")
+# Captions carry qualifications and sources. Streamlit renders them at reduced opacity, which falls below a 4.5:1
+# text contrast in both themes. A higher opacity of the theme text colour keeps them secondary but legible, and
+# links in captions take the caption colour with an underline.
+st.markdown("<style>[data-testid='stCaptionContainer']{opacity:0.82!important}"
+            "[data-testid='stCaptionContainer'] a{color:inherit!important;text-decoration:underline}</style>",
+            unsafe_allow_html=True)
 
 STATUS_STYLE = {  # colour is never the only cue: each status has a symbol and a word
     "GO": ("#1b5e20", "#e8f5e9", "✔"),
@@ -31,6 +37,10 @@ STATUS_STYLE = {  # colour is never the only cue: each status has a symbol and a
     "NO-GO": ("#b71c1c", "#ffebee", "✖"),
     "CANNOT ASSESS": ("#37474f", "#eceff1", "?"),
 }
+# Chart colours drawn on the page background. Each keeps a contrast ratio of at least 3:1 against both the light
+# (#ffffff) and the dark (#0e1117) Streamlit theme, so lines and points stay visible in either. Elements drawn on
+# the pastel bands of the condition chart keep their dark colours, because the bands are light in both themes.
+C_BLUE, C_CREW, C_GREEN, C_PURPLE, C_GREY = "#1e88e5", "#e65100", "#2e9d47", "#ab47bc", "#8a8f98"
 LINKS = {
     "Wood, Paloski and Clark 2015 (NASA crew posturography after ISS)": "https://doi.org/10.3357/AMHP.EC07.2015",
     "Human Balance Evaluation Database (PhysioNet)": "https://physionet.org/content/hbedb/1.0.0/",
@@ -203,6 +213,10 @@ with left:
     st.selectbox("Load an example", EX_NAMES, key="example", on_change=load_example,
                  help="Fills every control, and resets the pharmacological scenario to no dose. Post-landing examples are simulated from the participant's own "
                       "HBEDB recordings and the NASA crew recovery model.")
+    st.button("Reset to this example's values", on_click=load_example, use_container_width=True,
+              help="Restores the crew member, the time, every score and trial outcome, the session history and the "
+                   "pharmacological scenario to the values of the selected example. The input mode (single score or "
+                   "three trials) and the condition shown under 'From force plate to score' are kept.")
     st.radio("Crew member baseline", PARTICIPANTS, key="who", on_change=lambda: ss.update(history=[], awaiting=False),
                  help="Preflight baseline and age group. HBEDB reference scores serve as the preflight proxy. "
                       "Changing the crew member clears the session history.")
@@ -468,11 +482,16 @@ with right:
                           line=dict(color="#5d4037", width=2, dash="dot"))
         r = per[c]
         mark = {"GO": "#1b5e20", "CAUTION": "#8a5a00", "NO-GO": "#b71c1c", "CANNOT ASSESS": "#37474f"}[r.status]
-        fig.add_scatter(x=[ratios[c]], y=[i], mode="markers+text", showlegend=False,
-                        marker=dict(size=16, color=mark, symbol="x" if ss[f"out_{c}"] == "fall" else "diamond"),
-                        text=[f"{ratios[c]:.0%} · {r.status}"], textposition="bottom center",
+        fig.add_scatter(x=[ratios[c]], y=[i], mode="markers", showlegend=False,
+                        marker=dict(size=16, color=mark, symbol="x" if ss[f"out_{c}"] == "fall" else "diamond",
+                                    line=dict(color="#ffffff", width=1)),
                         hovertemplate=f"{C.CONDITION_LABELS[c]}: {ratios[c]:.1%} of baseline, GO threshold {q:.1%}"
                                       "<extra></extra>")
+        # Result label in a column to the right of the plot area, clear of the markers and lines, drawn on its
+        # own light background with a border in the status colour, so it reads in both themes.
+        fig.add_annotation(x=1.0, xref="paper", xanchor="left", xshift=10, y=i, showarrow=False,
+                           text=f"<b>{ratios[c]:.0%}</b> · {r.status}", font=dict(size=13, color="#212121"),
+                           bgcolor="#ffffff", bordercolor=mark, borderwidth=2, borderpad=4, width=172, align="left")
         if landed:
             w = F.wood(c)
             r_nasa = F.recovery(T, w["D"], w["tau"])
@@ -481,7 +500,7 @@ with right:
                             hovertemplate=f"typical ISS crew at {T:g} h: {r_nasa:.0%} (Wood et al. 2015)<extra></extra>")
     fig.add_vline(x=C.R_NOGO, line_color="#b71c1c", line_dash="dot",
                   annotation_text="75%", annotation_position="top")
-    fig.update_layout(height=320, margin=dict(t=24, b=40, l=10, r=10),
+    fig.update_layout(height=320, margin=dict(t=24, b=40, l=10, r=200),
                       xaxis=dict(range=[0, x_max], tickformat=".0%", title="score as % of own baseline"),
                       yaxis=dict(tickvals=list(range(4)), ticktext=names, range=[-0.6, 3.6]))
     st.plotly_chart(fig, use_container_width=True)
@@ -568,16 +587,16 @@ if med_allowed and fc and (test.status != "GO" or (med.active and (unreach or wo
     st.markdown(explain + explain_passed + " Recovery rates are taken from NASA crew data (Wood et al. 2015, Table III, n = 37 ISS crew).")
     fig2 = go.Figure()
     base_curve = M.curve(t_axis, lim.D_i, lim.tau)
-    fig2.add_scatter(x=t_axis, y=base_curve, name="typical recovery (Wood et al. 2015)", line=dict(color="#1565c0"))
+    fig2.add_scatter(x=t_axis, y=base_curve, name="typical recovery (Wood et al. 2015)", line=dict(color=C_BLUE))
     curve_min = float(np.min(base_curve))
     if med.active and P.drug_slope(cond) is not None:
         dosed = M.curve(t_axis, lim.D_i, lim.tau, med.dose_mg, med.route, P.drug_slope(cond), p.baseline(cond),
                         med.t_dose)
         curve_min = min(curve_min, float(np.min(dosed)))
         fig2.add_scatter(x=t_axis, y=dosed, name=f"with {med.dose_mg:g} mg {med.route}",
-                         line=dict(color="#6a1b9a", dash="dot"))
-    fig2.add_scatter(x=[T], y=[lim.r_m], mode="markers", marker=dict(size=11, color="#212121"), name="current session")
-    fig2.add_hline(y=q_lim, line_dash="dash", line_color="#1b5e20",
+                         line=dict(color=C_PURPLE, dash="dot"))
+    fig2.add_scatter(x=[T], y=[lim.r_m], mode="markers", marker=dict(size=11, color=C_CREW), name="current session")
+    fig2.add_hline(y=q_lim, line_dash="dash", line_color=C_GREEN,
                    annotation_text=f"GO threshold {q_lim:.2f}" + ("" if lim.hours else " (not reached)"),
                    annotation_position="bottom right")
     if test.status == "GO":
@@ -585,14 +604,15 @@ if med_allowed and fc and (test.status != "GO" or (med.active and (unreach or wo
     if unreach:
         title = title if test.status == "GO" else f"No retest estimate<br><sup>{label} does not reach its GO threshold</sup>"
     elif worst <= 0:
-        fig2.add_vline(x=T, line_color="#0d47a1", annotation_text="retest indicated", annotation_position="top")
+        fig2.add_vline(x=T, line_color=C_BLUE, annotation_text="retest indicated", annotation_position="top")
         title = f"Retest indicated<br><sup>{label} at its GO threshold under the typical rate</sup>"
     else:
         mid = T + lim.hours[1]
         lo = T + max(f.hours[0] for f in reach)  # shading = overall range across conditions, as in the caption
         hi = T + max(f.hours[2] for f in reach)
-        fig2.add_vrect(x0=lo, x1=hi, fillcolor="#90caf9", opacity=0.25, line_width=0)
-        fig2.add_vline(x=mid, line_color="#0d47a1", annotation_text=(f"retest ≈ {mid:.0f} h" if test.status != "GO" else f"threshold regained ≈ {mid:.0f} h"),
+        fig2.add_vrect(x0=lo, x1=hi, fillcolor="#90caf9", opacity=0.12, line_width=0)
+        # Fill kept light so that every line inside the range keeps at least 3:1 contrast in both themes.
+        fig2.add_vline(x=mid, line_color=C_BLUE, annotation_text=(f"retest ≈ {mid:.0f} h" if test.status != "GO" else f"threshold regained ≈ {mid:.0f} h"),
                        annotation_position="top")
         if test.status != "GO":
             title = f"Retest estimate<br><sup>{label} (rate-limiting condition)</sup>"
@@ -607,6 +627,52 @@ if med_allowed and fc and (test.status != "GO" or (med.active and (unreach or wo
         st.caption(f"Range {lo:.0f}–{hi:.0f} h after this session, derived from the published 95% confidence limits "
                    "of the crew model parameters (not a 95% interval for this crew member). The single-exponential "
                    "model does not represent the slower recovery phase over subsequent weeks.")
+
+# ---------------------------------------------------------------- pharmacological scenario, next to its chart
+with st.container(border=True):
+    st.subheader("Pharmacological scenario (what-if)")
+    st.markdown("**Promethazine (antiemetic) planned at or after the current session.** An unvalidated scenario: "
+                "a planned dose adjusts only the retest estimate and never the test result.")
+    if not med_allowed:
+        st.caption("Not applicable to the present inputs. The scenario applies only after landing, when every "
+                   "condition has a valid recording and no fall has occurred.")
+    else:
+        mc1, mc2, mc3 = st.columns(3)
+        with mc1:
+            st.select_slider("Planned dose (mg)", options=list(C.DOSES_MG), key="dose")
+        with mc2:
+            st.radio("Route", ["oral", "im"], format_func=lambda r: "oral" if r == "oral" else "intramuscular",
+                     horizontal=True, key="route", disabled=ss.get("dose", 0.0) == 0)
+        with mc3:
+            st.slider("Dose time (h after the current session)", 0.0, 48.0, step=0.5, key="dose_after", format="%.1f h",
+                      disabled=ss.get("dose", 0.0) == 0)
+        if ss.get("dose", 0.0) in (12.5, 50.0):
+            st.caption("The 12.5 and 50 mg effects are extrapolated from the 25 mg study.")
+    if med.active and fc:
+        def _cross(f, with_dose: bool):
+            c = f.condition
+            if with_dose:
+                return M.t_go(f.D_i, f.tau, q_by_cond[c], med.dose_mg, med.route, P.drug_slope(c),
+                              p.baseline(c), med.t_dose, 0.0)
+            return M.t_go(f.D_i, f.tau, q_by_cond[c])
+
+        med_conds = [f for f in fc if f.hours is not None and f.condition in fc_none and
+                     fc_none[f.condition].hours is not None and P.drug_slope(f.condition) is not None]
+        if not med_conds:
+            st.caption("The dose does not shift any condition with an attainable GO threshold for these inputs.")
+        for f in med_conds:
+            h0, h1 = _cross(fc_none[f.condition], False), _cross(f, True)
+            st.caption(f"{C.CONDITION_LABELS[f.condition].capitalize()} reaches its GO threshold at approximately "
+                       f"{h0:.1f} h after landing without the dose and {h1:.1f} h with it, on the typical-recovery "
+                       "curves.")
+        if not unreach and all(c in fc_none and fc_none[c].hours is not None for c in (f.condition for f in fc)):
+            all0 = [_cross(fc_none[f.condition], False) for f in fc]
+            all1 = [_cross(f, True) for f in fc]
+            if None not in all0 and None not in all1:
+                o0, o1 = max(all0), max(all1)
+                st.caption(f"All four conditions reach their GO thresholds at approximately {o0:.1f} h after landing "
+                           f"without the dose and {o1:.1f} h with it" + (" (no change)." if abs(o1 - o0) < 0.05 else "."))
+        st.info(M.WARN_FLIGHT)
 
 # ---------------------------------------------------------------- recovery compared with typical NASA crew
 if landed:
@@ -628,9 +694,9 @@ if landed:
         rr, cc = k // 2 + 1, k % 2 + 1
         w = F.wood(c)
         fig3.add_scatter(x=tt_n, y=[F.recovery(x, w["D"], w["tau"]) for x in tt_n], row=rr, col=cc,
-                         line=dict(color="#0d47a1", width=2), name="typical ISS crew (Wood et al. 2015)",
+                         line=dict(color=C_BLUE, width=2), name="typical ISS crew (Wood et al. 2015)",
                          showlegend=k == 0, hovertemplate="typical ISS crew at %{x:.0f} h: %{y:.0%}<extra></extra>")
-        fig3.add_hline(y=q_by_cond[c], line_dash="dash", line_color="#1b5e20", row=rr, col=cc)
+        fig3.add_hline(y=q_by_cond[c], line_dash="dash", line_color=C_GREEN, row=rr, col=cc)
         xs, ys, sym, lab = [], [], [], []
         for t_i, tr_i, out_i, name_i in pts:
             if out_i[c] == "invalid":  # an invalid recording is not a measurement
@@ -639,8 +705,8 @@ if landed:
             xs.append(t_i); ys.append(r_i); lab.append(name_i)
             sym.append("x" if out_i[c] == "fall" else "circle-open" if name_i.startswith("current") else "circle")
         fig3.add_scatter(x=xs, y=ys, mode="markers+lines", row=rr, col=cc, showlegend=k == 0, name="this crew member",
-                         line=dict(color="#424242", width=1, dash="dot"),
-                         marker=dict(size=10, color="#212121", symbol=sym), text=lab,
+                         line=dict(color=C_CREW, width=1, dash="dot"),
+                         marker=dict(size=10, color=C_CREW, symbol=sym, line=dict(color=C_CREW, width=2)), text=lab,
                          hovertemplate="%{text}: %{y:.0%} of own baseline<extra></extra>")
         if xs:
             diffs[c] = (ys[-1] - F.recovery(xs[-1], w["D"], w["tau"])) * 100, lab[-1]
@@ -665,13 +731,13 @@ if landed:
         st.caption(f"The current session ({t_now:g} h) precedes the last recorded session and is not plotted.")
     st.caption("Descriptive comparison only; it does not enter the decision. Blue line: NASA crew recovery model "
                "(Wood et al. 2015, Table III, n = 37), transferred to the conditions used here as in the chart above. "
-               "Dashed green line: this crew member's GO threshold. Filled points: recorded sessions; open point: the "
+               "Dashed green line: this crew member's GO threshold. Orange points: this crew member, filled for recorded sessions and open for the "
                "current session; a cross marks a fall. Invalid recordings are not plotted. With two or more sessions, the trajectory shows whether this "
                "crew member is recovering faster or slower than the typical crew member. Simulated sessions follow the "
                "typical curve with this participant's own trial spread, so their agreement with it is by construction.")
 
-tab_meas, tab_med, tab_nasa, tab_other = st.tabs(["From force plate to score", "Pharmacological scenario",
-                                                  "NASA data and limitations", "Additional crew data (context)"])
+tab_meas, tab_nasa, tab_other = st.tabs(["From force plate to score", "NASA data and limitations",
+                                        "Additional crew data (context)"])
 
 
 @st.cache_data(show_spinner=False)
@@ -702,9 +768,9 @@ with tab_meas:
     ptp = float(np.nanmax(xx) - np.nanmin(xx))
     theta = float(np.degrees(np.arctan(ptp / (C.COM_HEIGHT_FRAC * hgt))))
     fig6 = go.Figure()
-    fig6.add_scatter(x=tt, y=xx, line=dict(color="#1565c0", width=1.5), name="centre of mass")
-    fig6.add_hline(y=float(np.nanmax(xx)), line_dash="dot", line_color="#757575")
-    fig6.add_hline(y=float(np.nanmin(xx)), line_dash="dot", line_color="#757575",
+    fig6.add_scatter(x=tt, y=xx, line=dict(color=C_BLUE, width=1.5), name="centre of mass")
+    fig6.add_hline(y=float(np.nanmax(xx)), line_dash="dot", line_color=C_GREY)
+    fig6.add_hline(y=float(np.nanmin(xx)), line_dash="dot", line_color=C_GREY,
                    annotation_text=f"peak-to-peak {ptp:.2f} cm", annotation_position="bottom right")
     fig6.update_layout(title=f"Recorded baseline trial {tid}<br><sup>{C.CONDITION_LABELS[mc]}, anterior–posterior "
                              "centre-of-mass sway</sup>", height=320, xaxis_title="time (s)",
@@ -716,52 +782,6 @@ with tab_meas:
                "this condition. The median of the three trials is the preflight baseline used in the decision. The "
                "same computation applies to any force plate that records the centre of pressure and the horizontal "
                "force.")
-# ---------------------------------------------------------------- tab: medicine what-if
-with tab_med:
-    st.markdown("**Promethazine (antiemetic) planned at or after the current session.** A planned dose adjusts only "
-                f"the retest estimate and never the test result ({M.LABEL}).")
-    if not med_allowed:
-        st.caption("Not applicable to the present inputs. The scenario applies only after landing, when every "
-                   "condition has a valid recording and no fall has occurred.")
-    else:
-        mc1, mc2, mc3 = st.columns(3)
-        with mc1:
-            st.select_slider("Planned dose (mg)", options=list(C.DOSES_MG), key="dose")
-        with mc2:
-            st.radio("Route", ["oral", "im"], format_func=lambda r: "oral" if r == "oral" else "intramuscular",
-                     horizontal=True, key="route", disabled=ss.get("dose", 0.0) == 0)
-        with mc3:
-            st.slider("Dose time (h after the current session)", 0.0, 48.0, step=0.5, key="dose_after",
-                      disabled=ss.get("dose", 0.0) == 0)
-        if ss.get("dose", 0.0) in (12.5, 50.0):
-            st.caption("The 12.5 and 50 mg effects are extrapolated from the 25 mg study.")
-    if med.active and fc:
-        def _cross(f, with_dose: bool):
-            c = f.condition
-            if with_dose:
-                return M.t_go(f.D_i, f.tau, q_by_cond[c], med.dose_mg, med.route, P.drug_slope(c),
-                              p.baseline(c), med.t_dose, 0.0)
-            return M.t_go(f.D_i, f.tau, q_by_cond[c])
-
-        med_conds = [f for f in fc if f.hours is not None and f.condition in fc_none and
-                     fc_none[f.condition].hours is not None and P.drug_slope(f.condition) is not None]
-        if not med_conds:
-            st.caption("The dose does not shift any condition with an attainable GO threshold for these inputs.")
-        for f in med_conds:
-            h0, h1 = _cross(fc_none[f.condition], False), _cross(f, True)
-            st.caption(f"{C.CONDITION_LABELS[f.condition].capitalize()} reaches its GO threshold at approximately "
-                       f"{h0:.1f} h after landing without the dose and {h1:.1f} h with it, on the typical-recovery "
-                       "curves.")
-        if not unreach and all(c in fc_none and fc_none[c].hours is not None for c in (f.condition for f in fc)):
-            all0 = [_cross(fc_none[f.condition], False) for f in fc]
-            all1 = [_cross(f, True) for f in fc]
-            if None not in all0 and None not in all1:
-                o0, o1 = max(all0), max(all1)
-                st.caption(f"All four conditions reach their GO thresholds at approximately {o0:.1f} h after landing "
-                           f"without the dose and {o1:.1f} h with it" + (" (no change)." if abs(o1 - o0) < 0.05 else "."))
-        st.info(M.WARN_FLIGHT)
-
-
 # ---------------------------------------------------------------- tab: other crew data (NASA OSDR)
 @st.cache_data(show_spinner=False)
 def crew_labs():
@@ -782,13 +802,13 @@ with tab_other:
     for subj, g in lab.groupby("subject"):
         g = g.sort_values("day")
         fig4.add_scatter(x=g["day"], y=g["share"], mode="lines+markers", name=f"crew member {subj}")
-    fig4.add_vline(x=0, line_dash="dot", line_color="#616161", annotation_text="flight", annotation_position="top")
-    fig4.add_hline(y=1.0, line_color="#9e9e9e", line_width=1)
+    fig4.add_vline(x=0, line_dash="dot", line_color=C_GREY, annotation_text="flight", annotation_position="top")
+    fig4.add_hline(y=1.0, line_color=C_GREY, line_width=1)
     fig4.update_layout(title=f"{analyte.capitalize().replace('(bun)', '(BUN)')}<br><sup>ratio to each crew member's "
                              "preflight mean</sup>", height=340,
                        xaxis_title="days before launch (negative) and after return (positive), with the 3-day flight at 0",
                        yaxis_title="ratio to preflight mean", margin=dict(t=70, b=10),
-                       legend=dict(orientation="h", y=-0.3))
+                       legend=dict(orientation="h", y=-0.3), colorway=[C_BLUE, C_CREW, C_GREEN, C_PURPLE])
     st.plotly_chart(fig4, use_container_width=True)
     r1 = lab[lab.timepoint == "R+1"].sort_values("subject")
     st.dataframe(pd.DataFrame({"Crew member": r1["subject"], "Day after return (R+1)": r1["value"].round(2),
