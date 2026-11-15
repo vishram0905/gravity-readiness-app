@@ -259,6 +259,8 @@ with left:
         st.radio("Trial outcome", OUTCOMES, key=f"out_{c}", horizontal=True, format_func=OUTCOME_LABELS.get, on_change=mark_entered,
                  label_visibility="collapsed")
 
+    dose_slot = st.container(border=True)  # filled below, once the inputs have been evaluated
+
     st.markdown("**Session history**")
     hist = ss.get("history", [])
     last_t = hist[-1]["t"] if hist else None
@@ -514,6 +516,8 @@ with right:
                   "examples the score coincides with the circle by construction, which is not independent agreement."
                   if landed else ""))
 
+    retest_slot = st.container()  # retest chart and planned-dose effect, directly below the condition chart
+
     # Rule check per condition, in the order the engine applies the rules.
     def tick(ok):
         return "✔" if ok else "✖"
@@ -548,107 +552,113 @@ def forecast_axis() -> np.ndarray:
 
 
 t_axis = forecast_axis()  # the model is not extrapolated backwards in time before the measurement
-if med_allowed and fc and (test.status != "GO" or (med.active and (unreach or worst > 0))):
-    st.subheader("Estimated retest time")
-    if unreach:
-        lim = unreach[0]
-    elif worst > 0:
-        lim = max(reach, key=lambda f: f.hours[1])
-    else:
-        lim = min(fc, key=lambda f: f.r_m - q_by_cond[f.condition])
-    if passed:
-        names_p = [C.CONDITION_LABELS[c] for c in C.CONDITIONS if c in passed]
-        explain_passed = (f" {names_p[0].capitalize()} is already at or above its GO threshold and requires no "
-                          "recovery." if len(names_p) == 1 else
-                          f" {len(names_p)} conditions ({' · '.join(names_p)}) are already at or above their GO "
-                          "thresholds and require no recovery.")
-    else:
-        explain_passed = ""
-    cond = lim.condition
-    q_lim = q_by_cond[cond]
-    label = C.CONDITION_LABELS[cond]
-    gl = C.CONDITION_LABELS[governing]
-    if test.status == "GO":
-        explain = ("The session is GO. With the planned dose, " + label + (
-            " is not predicted to regain its GO threshold under the typical recovery model." if unreach else
-            f" is predicted to fall below its GO threshold and to regain it at approximately {T + worst:.0f} h after "
-            "landing."))
-    elif unreach:
-        explain = (f"{label.capitalize()} is not predicted to reach its GO threshold under the typical recovery model, "
-                   "so no retest time can be estimated.")
-    elif worst <= 0:
-        explain = "Under the typical recovery rate, every condition has already reached its GO threshold."
-    elif cond == governing:
-        explain = (f"{gl.capitalize()} determines the present {test.status} result and is also predicted to reach its "
-                   "GO threshold last, so it determines the retest estimate.")
-    else:
-        explain = (f"{gl.capitalize()} determines the present {test.status} result. {label.capitalize()} is predicted "
-                   "to reach its GO threshold last and therefore determines the retest estimate.")
-    st.markdown(explain + explain_passed + " Recovery rates are taken from NASA crew data (Wood et al. 2015, Table III, n = 37 ISS crew).")
-    fig2 = go.Figure()
-    base_curve = M.curve(t_axis, lim.D_i, lim.tau)
-    fig2.add_scatter(x=t_axis, y=base_curve, name="typical recovery (Wood et al. 2015)", line=dict(color=C_BLUE))
-    curve_min = float(np.min(base_curve))
-    if med.active and P.drug_slope(cond) is not None:
-        dosed = M.curve(t_axis, lim.D_i, lim.tau, med.dose_mg, med.route, P.drug_slope(cond), p.baseline(cond),
-                        med.t_dose)
-        curve_min = min(curve_min, float(np.min(dosed)))
-        fig2.add_scatter(x=t_axis, y=dosed, name=f"with {med.dose_mg:g} mg {med.route}",
-                         line=dict(color=C_PURPLE, dash="dot"))
-    fig2.add_scatter(x=[T], y=[lim.r_m], mode="markers", marker=dict(size=11, color=C_CREW), name="current session")
-    fig2.add_hline(y=q_lim, line_dash="dash", line_color=C_GREEN,
-                   annotation_text=f"GO threshold {q_lim:.2f}" + ("" if lim.hours else " (not reached)"),
-                   annotation_position="bottom right")
-    if test.status == "GO":
-        title = f"Effect of the planned dose<br><sup>{label}</sup>"
-    if unreach:
-        title = title if test.status == "GO" else f"No retest estimate<br><sup>{label} does not reach its GO threshold</sup>"
-    elif worst <= 0:
-        fig2.add_vline(x=T, line_color=C_BLUE, annotation_text="retest indicated", annotation_position="top")
-        title = f"Retest indicated<br><sup>{label} at its GO threshold under the typical rate</sup>"
-    else:
-        mid = T + lim.hours[1]
-        lo = T + max(f.hours[0] for f in reach)  # shading = overall range across conditions, as in the caption
-        hi = T + max(f.hours[2] for f in reach)
-        fig2.add_vrect(x0=lo, x1=hi, fillcolor="#90caf9", opacity=0.12, line_width=0)
-        # Fill kept light so that every line inside the range keeps at least 3:1 contrast in both themes.
-        fig2.add_vline(x=mid, line_color=C_BLUE, annotation_text=(f"retest ≈ {mid:.0f} h" if test.status != "GO" else f"threshold regained ≈ {mid:.0f} h"),
-                       annotation_position="top")
-        if test.status != "GO":
-            title = f"Retest estimate<br><sup>{label} (rate-limiting condition)</sup>"
-    y_lo = max(0.0, min(lim.r_m, curve_min, q_lim) - 0.08)
-    st.plotly_chart(fig2.update_layout(title=title, height=340, yaxis=dict(range=[y_lo, max(1.04, q_lim + 0.04, lim.r_m + 0.04)],
-                                                                           title="ratio to baseline"),
-                                       xaxis_title="hours after landing", margin=dict(t=70, b=10),
-                                       legend=dict(orientation="h", y=-0.25)), use_container_width=True)
-    if not unreach and worst > 0:
-        lo = max(f.hours[0] for f in reach)
-        hi = max(f.hours[2] for f in reach)
-        st.caption(f"Range {lo:.0f}–{hi:.0f} h after this session, derived from the published 95% confidence limits "
-                   "of the crew model parameters (not a 95% interval for this crew member). The single-exponential "
-                   "model does not represent the slower recovery phase over subsequent weeks.")
+with retest_slot:
+    if med_allowed and fc and (test.status != "GO" or (med.active and (unreach or worst > 0))):
+        st.subheader("Estimated retest time")
+        if unreach:
+            lim = unreach[0]
+        elif worst > 0:
+            lim = max(reach, key=lambda f: f.hours[1])
+        else:
+            lim = min(fc, key=lambda f: f.r_m - q_by_cond[f.condition])
+        if passed:
+            names_p = [C.CONDITION_LABELS[c] for c in C.CONDITIONS if c in passed]
+            explain_passed = (f" {names_p[0].capitalize()} is already at or above its GO threshold and requires no "
+                              "recovery." if len(names_p) == 1 else
+                              f" {len(names_p)} conditions ({' · '.join(names_p)}) are already at or above their GO "
+                              "thresholds and require no recovery.")
+        else:
+            explain_passed = ""
+        cond = lim.condition
+        q_lim = q_by_cond[cond]
+        label = C.CONDITION_LABELS[cond]
+        gl = C.CONDITION_LABELS[governing]
+        if test.status == "GO":
+            explain = ("The session is GO. With the planned dose, " + label + (
+                " is not predicted to regain its GO threshold under the typical recovery model." if unreach else
+                f" is predicted to fall below its GO threshold and to regain it at approximately {T + worst:.0f} h after "
+                "landing."))
+        elif unreach:
+            explain = (f"{label.capitalize()} is not predicted to reach its GO threshold under the typical recovery model, "
+                       "so no retest time can be estimated.")
+        elif worst <= 0:
+            explain = "Under the typical recovery rate, every condition has already reached its GO threshold."
+        elif cond == governing:
+            explain = (f"{gl.capitalize()} determines the present {test.status} result and is also predicted to reach its "
+                       "GO threshold last, so it determines the retest estimate.")
+        else:
+            explain = (f"{gl.capitalize()} determines the present {test.status} result. {label.capitalize()} is predicted "
+                       "to reach its GO threshold last and therefore determines the retest estimate.")
+        st.markdown(explain + explain_passed + " Recovery rates are taken from NASA crew data (Wood et al. 2015, Table III, n = 37 ISS crew).")
+        fig2 = go.Figure()
+        base_curve = M.curve(t_axis, lim.D_i, lim.tau)
+        fig2.add_scatter(x=t_axis, y=base_curve, name="typical recovery (Wood et al. 2015)", line=dict(color=C_BLUE))
+        curve_min = float(np.min(base_curve))
+        if med.active and P.drug_slope(cond) is not None:
+            dosed = M.curve(t_axis, lim.D_i, lim.tau, med.dose_mg, med.route, P.drug_slope(cond), p.baseline(cond),
+                            med.t_dose)
+            curve_min = min(curve_min, float(np.min(dosed)))
+            fig2.add_scatter(x=t_axis, y=dosed, name=f"with {med.dose_mg:g} mg {med.route}",
+                             line=dict(color=C_PURPLE, dash="dot"))
+        fig2.add_scatter(x=[T], y=[lim.r_m], mode="markers", marker=dict(size=11, color=C_CREW), name="current session")
+        fig2.add_hline(y=q_lim, line_dash="dash", line_color=C_GREEN,
+                       annotation_text=f"GO threshold {q_lim:.2f}" + ("" if lim.hours else " (not reached)"),
+                       annotation_position="bottom right")
+        if test.status == "GO":
+            title = f"Effect of the planned dose<br><sup>{label}</sup>"
+        if unreach:
+            title = title if test.status == "GO" else f"No retest estimate<br><sup>{label} does not reach its GO threshold</sup>"
+        elif worst <= 0:
+            fig2.add_vline(x=T, line_color=C_BLUE, annotation_text="retest indicated", annotation_position="top")
+            title = f"Retest indicated<br><sup>{label} at its GO threshold under the typical rate</sup>"
+        else:
+            mid = T + lim.hours[1]
+            lo = T + max(f.hours[0] for f in reach)  # shading = overall range across conditions, as in the caption
+            hi = T + max(f.hours[2] for f in reach)
+            fig2.add_vrect(x0=lo, x1=hi, fillcolor="#90caf9", opacity=0.12, line_width=0)
+            # Fill kept light so that every line inside the range keeps at least 3:1 contrast in both themes.
+            fig2.add_vline(x=mid, line_color=C_BLUE, annotation_text=(f"retest ≈ {mid:.0f} h" if test.status != "GO" else f"threshold regained ≈ {mid:.0f} h"),
+                           annotation_position="top")
+            if test.status != "GO":
+                title = f"Retest estimate<br><sup>{label} (rate-limiting condition)</sup>"
+        y_lo = max(0.0, min(lim.r_m, curve_min, q_lim) - 0.08)
+        st.plotly_chart(fig2.update_layout(title=title, height=340, yaxis=dict(range=[y_lo, max(1.04, q_lim + 0.04, lim.r_m + 0.04)],
+                                                                               title="ratio to baseline"),
+                                           xaxis_title="hours after landing", margin=dict(t=70, b=10),
+                                           legend=dict(orientation="h", y=-0.25)), use_container_width=True)
+        if not unreach and worst > 0:
+            lo = max(f.hours[0] for f in reach)
+            hi = max(f.hours[2] for f in reach)
+            st.caption(f"Range {lo:.0f}–{hi:.0f} h after this session, derived from the published 95% confidence limits "
+                       "of the crew model parameters (not a 95% interval for this crew member). The single-exponential "
+                       "model does not represent the slower recovery phase over subsequent weeks.")
 
-# ---------------------------------------------------------------- pharmacological scenario, next to its chart
-with st.container(border=True):
-    st.subheader("Pharmacological scenario (what-if)")
-    st.markdown("**Promethazine (antiemetic) planned at or after the current session.** An unvalidated scenario: "
-                "a planned dose adjusts only the retest estimate and never the test result.")
+
+# ---------------------------------------------------------------- pharmacological scenario: controls with the other
+# inputs, effect below the retest chart
+with dose_slot:
+    st.markdown("**Pharmacological scenario (what-if)**")
+    st.caption("Promethazine (antiemetic) planned at or after the current session. An unvalidated scenario: "
+               "a planned dose adjusts only the retest estimate and never the test result. Its effect is shown "
+               "under the retest chart.")
     if not med_allowed:
         st.caption("Not applicable to the present inputs. The scenario applies only after landing, when every "
                    "condition has a valid recording and no fall has occurred.")
     else:
-        mc1, mc2, mc3 = st.columns(3)
+        mc1, mc2 = st.columns([3, 2])
         with mc1:
             st.select_slider("Planned dose (mg)", options=list(C.DOSES_MG), key="dose")
         with mc2:
             st.radio("Route", ["oral", "im"], format_func=lambda r: "oral" if r == "oral" else "intramuscular",
-                     horizontal=True, key="route", disabled=ss.get("dose", 0.0) == 0)
-        with mc3:
-            st.slider("Dose time (h after the current session)", 0.0, 48.0, step=0.5, key="dose_after", format="%.1f h",
-                      disabled=ss.get("dose", 0.0) == 0)
+                     key="route", disabled=ss.get("dose", 0.0) == 0)
+        st.slider("Dose time (h after the current session)", 0.0, 48.0, step=0.5, key="dose_after", format="%.1f h",
+                  disabled=ss.get("dose", 0.0) == 0)
         if ss.get("dose", 0.0) in (12.5, 50.0):
             st.caption("The 12.5 and 50 mg effects are extrapolated from the 25 mg study.")
-    if med.active and fc:
+if med.active and fc:
+    with retest_slot, st.container(border=True):
+        st.markdown(f"**Planned dose: {med.dose_mg:g} mg "
+                    f"{'oral' if med.route == 'oral' else 'intramuscular'}, {float(ss.get('dose_after', 0.0)):g} h after this session**")
         def _cross(f, with_dose: bool):
             c = f.condition
             if with_dose:
